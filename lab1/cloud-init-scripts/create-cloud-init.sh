@@ -12,8 +12,8 @@ cpuTypeRequired="host"
 
 apt update
 apt install libguestfs-tools -y
-# rm *.img
-# wget -O $imageName $imageURL
+rm *.img
+wget -O $imageName $imageURL
 qm destroy $virtualMachineId
 virt-customize -a $imageName --install qemu-guest-agent
 virt-customize -a $imageName --root-password password:$rootPasswd
@@ -22,7 +22,7 @@ qm importdisk $virtualMachineId $imageName $volumeName
 qm set $virtualMachineId --scsihw virtio-scsi-pci --scsi0 $volumeName:vm-$virtualMachineId-disk-0
 qm set $virtualMachineId --boot c --bootdisk scsi0
 qm set $virtualMachineId --ide2 $volumeName:cloudinit
-# qm set $virtualMachineId --serial0 socket --vga serial0
+qm set $virtualMachineId --serial0 socket --vga serial0
 qm set $virtualMachineId --ipconfig0 ip=dhcp
 qm set $virtualMachineId --cpu cputype=$cpuTypeRequired
 qm set $virtualMachineId --agent enabled=1
