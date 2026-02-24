@@ -1,0 +1,19 @@
+---
+- name: Create Portainer data volume
+  community.docker.docker_volume:
+    name: portainer_data
+    state: present
+
+- name: Deploy Portainer CE container
+  community.docker.docker_container:
+    name: portainer
+    image: "portainer/portainer-ce:{{ portainer_version | default('latest') }}"
+    state: started
+    restart_policy: always
+    pull: true
+    ports:
+      - "{{ portainer_http_port | default('8000') }}:8000"
+      - "{{ portainer_https_port | default('9443') }}:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data

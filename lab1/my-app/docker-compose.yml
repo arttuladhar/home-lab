@@ -1,0 +1,10 @@
+services:
+  web:
+    image: youruser/myapp:latest
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 30s
+      retries: 3

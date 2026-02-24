@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and fill in. Do not commit terraform.tfvars.
+
+proxmox_api_url   = "https://your-proxmox:8006/api2/json"
+proxmox_api_token_id = "user@pam!terraform"
+proxmox_api_token_secret = "your-token-secret"
+proxmox_node_name = "proxmox"
+vm_template_id    = 9000
+bridge            = "vmbr0"
+ssh_public_keys = ["<ssh_public_key>"]

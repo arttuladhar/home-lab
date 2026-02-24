@@ -1,0 +1,23 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+
+# Ansible
+.vault_pass
+*.retry
+
+# Env and secrets
+.env
+.env.*
+*.pem
+
+# OS and editor
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
