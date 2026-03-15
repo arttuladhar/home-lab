@@ -1,0 +1,23 @@
+services:
+  nginx-proxy-manager:
+    image: jc21/nginx-proxy-manager
+    container_name: Nginx-Proxy-Manager
+    healthcheck:
+      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/81' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    volumes:
+      - {{ npm_data_dir }}/letsencrypt:/etc/letsencrypt:rw
+      - {{ npm_data_dir }}/data:/data:rw
+      - {{ npm_data_dir }}/config.json:/app/config/production.json
+    environment:
+      TZ: "{{ npm_timezone }}"
+      INITIAL_ADMIN_EMAIL: "{{ npm_initial_admin_email }}"
+      INITIAL_ADMIN_PASSWORD: "{{ npm_initial_admin_password }}"
+    ports:
+      - "443:443"
+      - "81:81"
+      - "80:80"
+    restart: on-failure:5

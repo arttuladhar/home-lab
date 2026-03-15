@@ -11,8 +11,8 @@ Four tools. Four layers. One complete automation pipeline.
 | Layer | Tool | What it does |
 |---|---|---|
 | Infrastructure | Terraform | Provisions the VM on Proxmox from code |
-| Configuration | Ansible | Installs Docker and configures the host |
-| Runtime | Docker | Runs the containerized application |
+| Configuration | Ansible | Installs Docker, deploys services, and configures the host |
+| Runtime | Docker | Runs containerized services (Portainer, Homepage, NPM) |
 | Delivery | GitHub Actions | Builds, pushes, and deploys on every push |
 
 Every layer has a clear responsibility. Blurring those boundaries — running config management inside Terraform, or deploying from SSH instead of a pipeline — creates systems that are harder to debug, harder to hand off, and harder to rebuild under pressure.
@@ -55,7 +55,12 @@ Terraform describes infrastructure declaratively. You define what should exist; 
 ```bash
 cd lab1/terraform/
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars: set proxmox_url, api_token, node_name, template_id
+# Edit terraform.tfvars — set the following variables:
+#   proxmox_api_url, proxmox_api_token_id, proxmox_api_token_secret
+#   proxmox_node_name, vm_template_id, bridge, disk_size
+#   ssh_public_keys, vm_password
+#   vm_ip_address  — static IP in CIDR notation (e.g. 192.168.4.31/24)
+#   vm_gateway     — default gateway (e.g. 192.168.4.1)
 ```
 
 **Apply:**
@@ -85,8 +90,28 @@ Ansible connects over SSH, runs idempotent tasks, and leaves the machine in a kn
 
 ```bash
 cd lab1/ansible/
-# Edit inventory.ini: set the IP or hostname of docker-host-01
+# inventory.ini is pre-configured with the static IP assigned by Terraform.
+# No manual IP lookup required — the VM always comes up at the address
+# defined in vm_ip_address (terraform.tfvars).
 ```
+
+**Install required collections:**
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
+
+**Configure role defaults** (optional — override in `host_vars/` or pass `--extra-vars`):
+
+| Role | Variable | Default |
+|---|---|---|
+| `homepage` | `homepage_port` | `4200` |
+| `homepage` | `homepage_allowed_hosts` | `192.168.4.23:4200,...` |
+| `nginx-proxy-manager` | `npm_data_dir` | `/volume1/docker/npm` |
+| `nginx-proxy-manager` | `npm_initial_admin_email` | set before first run |
+| `nginx-proxy-manager` | `npm_initial_admin_password` | set before first run |
+
+> **Heads-up:** `npm_initial_admin_email` and `npm_initial_admin_password` are used only on first startup to seed the NPM admin account. They are sensitive values — pass them via `--extra-vars` or Ansible Vault rather than committing them to `defaults/main.yml`.
 
 **Apply:**
 
@@ -94,17 +119,38 @@ cd lab1/ansible/
 ansible-playbook -i inventory.ini site.yml
 ```
 
-The keyword here is **idempotent**. If Docker is already installed, Ansible won't reinstall it. If the service is running, it won't restart it unnecessarily. Run this playbook tomorrow and it won't degrade anything.
+The keyword here is **idempotent**. If Docker is already installed, Ansible won't reinstall it. If a container stack is already running, it won't restart it unnecessarily. Run this playbook tomorrow and it won't degrade anything.
+
+The playbook applies four roles in order:
+
+| Role | What it does |
+|---|---|
+| `docker` | Installs Docker Engine and the Compose plugin |
+| `portainer` | Deploys Portainer CE for container management UI |
+| `homepage` | Deploys the [Homepage](https://gethomepage.dev) dashboard on port `4200` |
+| `nginx-proxy-manager` | Deploys [Nginx Proxy Manager](https://nginxproxymanager.com) on ports `80`, `443`, `81` (admin UI) |
 
 As your lab grows, Ansible roles keep things organized:
 
 ```
 ansible/
+├── ansible.cfg
 ├── inventory.ini
 ├── site.yml
+├── requirements.yml
 └── roles/
-    └── docker/
-        └── tasks/main.yml
+    ├── docker/
+    │   └── tasks/main.yml
+    ├── portainer/
+    │   └── tasks/main.yml
+    ├── homepage/
+    │   ├── defaults/main.yml
+    │   ├── tasks/main.yml
+    │   └── templates/docker-compose.yml.j2
+    └── nginx-proxy-manager/
+        ├── defaults/main.yml
+        ├── tasks/main.yml
+        └── templates/docker-compose.yml.j2
 ```
 
 This isn't overengineering — it's rehearsal for environments where multiple people maintain the same automation repository.
@@ -113,9 +159,18 @@ This isn't overengineering — it's rehearsal for environments where multiple pe
 
 ## Step 3 — Containerization with Docker
 
-Your VM is now a Docker host. Instead of installing Nginx directly onto the OS, you declare it as a container workload.
+Your VM is now a Docker host. Ansible deploys all services as container stacks — nothing is installed directly onto the OS beyond Docker itself.
 
-**Setup the app directory on the Docker host:**
+The Ansible playbook provisions four services, each as an isolated Compose stack:
+
+| Service | Port(s) | Purpose |
+|---|---|---|
+| **Portainer** | `9000` | Container management UI |
+| **Homepage** | `4200` | Lab dashboard — aggregates service links and status |
+| **Nginx Proxy Manager** | `80`, `443`, `81` | Reverse proxy with Let's Encrypt TLS and a web admin UI |
+| **my-app** | (CI/CD-managed) | Your custom app, deployed by the GitHub Actions pipeline |
+
+**Setup the custom app directory on the Docker host:**
 
 ```bash
 mkdir -p /opt/my-app
@@ -126,8 +181,8 @@ mkdir -p /opt/my-app
 A few lessons baked into the Docker layer worth internalizing:
 
 - **Pin versions.** Don't use `latest` in production-style configs. `nginx:1.25-alpine` is explicit and reproducible.
-- **Add health checks.** They determine how your stack behaves at 3 a.m. when something quietly fails.
-- **Specify restart policies.** `unless-stopped` means Docker restarts your container after a reboot without intervention.
+- **Add health checks.** They determine how your stack behaves at 3 a.m. when something quietly fails. NPM's health check (`/dev/tcp/127.0.0.1/81`) is a good pattern to copy.
+- **Specify restart policies.** `on-failure:5` retries on crash but won't loop endlessly if the container is intentionally stopped.
 
 With Docker, your application becomes a portable artifact — built in CI, tagged, pushed to a registry, pulled onto any compatible host. That separation between *build* and *run* is what makes automated delivery possible.
 
@@ -166,7 +221,11 @@ With a pipeline, change is event-driven: a Git push triggers a build → produce
 | Path | Purpose |
 |---|---|
 | [`terraform/`](terraform/) | Proxmox VM definition — `docker-host-01` |
-| [`ansible/`](ansible/) | Docker install and host configuration |
+| [`ansible/`](ansible/) | Docker install, service deployment, host configuration |
+| [`ansible/roles/docker/`](ansible/roles/docker/) | Installs Docker Engine |
+| [`ansible/roles/portainer/`](ansible/roles/portainer/) | Deploys Portainer CE |
+| [`ansible/roles/homepage/`](ansible/roles/homepage/) | Deploys Homepage dashboard |
+| [`ansible/roles/nginx-proxy-manager/`](ansible/roles/nginx-proxy-manager/) | Deploys Nginx Proxy Manager |
 | [`my-app/`](my-app/) | Static site app (Dockerfile, index.html, docker-compose) |
 | [`.github/workflows/`](.github/workflows/) | CI/CD build and deploy workflow |
 | [`docs/`](docs/) | Supporting guides — Proxmox setup, cloud-init, blueprint |

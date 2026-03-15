@@ -29,10 +29,11 @@ resource "proxmox_virtual_environment_vm" "docker_host" {
 
   cpu {
     cores = 2
+    type  = "host"
   }
 
   memory {
-    dedicated = 4096
+    dedicated = 8192
   }
 
   disk {
@@ -49,6 +50,14 @@ resource "proxmox_virtual_environment_vm" "docker_host" {
     user_account {
       username = var.vm_user
       keys     = var.ssh_public_keys
+      password = var.vm_password
+    }
+
+    ip_config {
+      ipv4 {
+        address = var.vm_ip_address
+        gateway = var.vm_gateway
+      }
     }
   }
 }

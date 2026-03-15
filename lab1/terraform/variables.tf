@@ -48,3 +48,19 @@ variable "ssh_public_keys" {
   description = "List of SSH public keys to authorize on the VM"
   type        = list(string)
 }
+
+variable "vm_password" {
+  description = "Password for the VM's default user account"
+  type        = string
+  sensitive   = true
+}
+
+variable "vm_ip_address" {
+  description = "Static IPv4 address for the VM in CIDR notation (e.g. 192.168.4.50/24)"
+  type        = string
+}
+
+variable "vm_gateway" {
+  description = "Default gateway for the VM"
+  type        = string
+}

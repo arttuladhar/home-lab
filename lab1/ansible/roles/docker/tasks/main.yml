@@ -20,7 +20,9 @@
 
 - name: Install Docker engine
   apt:
-    name: docker-ce
+    name:
+      - docker-ce
+      - docker-compose-plugin
     state: present
     update_cache: yes
 

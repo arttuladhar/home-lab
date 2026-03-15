@@ -1,0 +1,5 @@
+---
+npm_data_dir: /volume1/docker/npm
+npm_timezone: America/Chicago
+npm_initial_admin_email: <initial_admin_email>
+npm_initial_admin_password: <initial_admin_password>

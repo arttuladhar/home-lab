@@ -1,0 +1,19 @@
+---
+- name: Create homepage config directory
+  ansible.builtin.file:
+    path: "{{ homepage_config_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy homepage stack compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /volume1/docker/homepage/docker-compose.yml
+    mode: "0644"
+
+- name: Deploy homepage stack
+  community.docker.docker_compose_v2:
+    project_name: homepage
+    project_src: /volume1/docker/homepage
+    state: present
+    pull: always

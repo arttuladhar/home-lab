@@ -6,3 +6,5 @@
   roles:
     - docker
     - portainer
+    - homepage
+    - nginx-proxy-manager

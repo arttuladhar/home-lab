@@ -1,0 +1,4 @@
+---
+homepage_config_dir: /volume1/docker/homepage/config
+homepage_port: 4200
+homepage_allowed_hosts: "192.168.4.23:4200,arttuladhar.duckdns.org"

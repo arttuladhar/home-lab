@@ -1,0 +1,41 @@
+---
+- name: Create NPM data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ npm_data_dir }}"
+    - "{{ npm_data_dir }}/letsencrypt"
+    - "{{ npm_data_dir }}/data"
+
+- name: Stat NPM config.json path
+  ansible.builtin.stat:
+    path: "{{ npm_data_dir }}/config.json"
+  register: npm_config_stat
+
+- name: Remove config.json if it is a directory
+  ansible.builtin.file:
+    path: "{{ npm_data_dir }}/config.json"
+    state: absent
+  when: npm_config_stat.stat.exists and npm_config_stat.stat.isdir
+
+- name: Create NPM config.json if absent
+  ansible.builtin.copy:
+    dest: "{{ npm_data_dir }}/config.json"
+    content: "{}"
+    force: false
+    mode: "0644"
+
+- name: Deploy NPM stack compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ npm_data_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Deploy nginx-proxy-manager stack
+  community.docker.docker_compose_v2:
+    project_name: nginx-proxy-manager
+    project_src: "{{ npm_data_dir }}"
+    state: present
+    pull: always
