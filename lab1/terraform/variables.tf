@@ -64,3 +64,9 @@ variable "vm_gateway" {
   description = "Default gateway for the VM"
   type        = string
 }
+
+variable "root_password" {
+  description = "Root password for Proxmox API authentication"
+  type        = string
+  sensitive   = true
+}

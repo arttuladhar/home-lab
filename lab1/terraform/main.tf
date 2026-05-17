@@ -9,7 +9,8 @@ terraform {
 
 provider "proxmox" {
   endpoint  = var.proxmox_api_url
-  api_token = "${var.proxmox_api_token_id}=${var.proxmox_api_token_secret}"
+  username  = "root@pam"
+  password  = var.root_password
   insecure = true
 
   ssh {
@@ -44,6 +45,10 @@ resource "proxmox_virtual_environment_vm" "docker_host" {
 
   network_device {
     bridge = var.bridge
+  }
+
+  usb {
+    host = "174c:235c"
   }
 
   initialization {

@@ -9,10 +9,11 @@
     name: portainer
     image: "portainer/portainer-ce:{{ portainer_version | default('latest') }}"
     state: started
+    recreate: true
     restart_policy: always
     pull: true
-    ports:
-      - "{{ portainer_http_port | default('8000') }}:8000"
+    published_ports:
+      - "{{ portainer_http_port | default('9000') }}:8000"
       - "{{ portainer_https_port | default('9443') }}:9443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
