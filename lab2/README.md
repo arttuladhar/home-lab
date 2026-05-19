@@ -1,35 +1,38 @@
 # Building a Production-Grade Homelab From Scratch
 
-> Before diving in, read the [Homelab DevOps Blueprint](docs/homelab-blueprint.md) for the philosophy behind this setup — why infrastructure as code matters, why dashboards aren't enough, and what separates a hobby lab from an engineered system.
+> Before diving in, read the [Ansible-First Homelab Blueprint](docs/ansible-first-homelab.md) for the philosophy behind this setup: why Lab 2 intentionally drops Proxmox and Terraform, why a manually installed Ubuntu host can still be managed like code, and why simpler architecture is sometimes the more disciplined choice.
 
-Most homelabs start the same way: spin up a VM, SSH in, install packages by hand, and call it done. It works. But it's also fragile — a "snowflake" server that exists only because you were there to click the right buttons at the right time.
+Lab 1 was about building the full pipeline: Proxmox, Terraform, Ansible, Docker, and CI/CD working together end to end.
 
-**Lab 1 is a deliberate break from that pattern.**
+**Lab 2 is a different lesson.**
 
-Four tools. Four layers. One complete automation pipeline.
+It is not a replacement for Lab 1. It is a separate path built around a different constraint: for this use case, provisioning another VM lifecycle with Proxmox and Terraform added complexity that did not create enough value. The better move was to install Ubuntu Server manually once, then treat everything after that point as code.
+
+Three tools. Three layers. One opinionated, hardened host.
 
 | Layer | Tool | What it does |
 |---|---|---|
-| Infrastructure | Terraform | Provisions the VM on Proxmox from code |
-| Configuration | Ansible | Installs Docker, deploys services, and configures the host |
-| Runtime | Docker | Runs containerized services (Portainer, Homepage, NPM) |
-| Delivery | GitHub Actions | Builds, pushes, and deploys on every push |
+| Operating system configuration | Ansible | Hardens Ubuntu, configures SSH, firewalling, updates, and admin services |
+| Runtime platform | Docker | Runs Portainer, Homepage, and Nginx Proxy Manager as managed stacks |
+| Delivery | GitHub Actions | Builds and deploys the example app automatically |
 
-Every layer has a clear responsibility. Blurring those boundaries — running config management inside Terraform, or deploying from SSH instead of a pipeline — creates systems that are harder to debug, harder to hand off, and harder to rebuild under pressure.
+The core idea is simple: **manual installation does not have to mean manual operations**.
+
+If the base OS install is a one-time bootstrap, but every meaningful configuration decision after that lives in Ansible, you still get repeatability, reviewability, and a clear operational model.
 
 ---
 
 ## What You'll Learn
 
-By completing this lab, you'll practice the same patterns used in cloud-native environments:
+By working through Lab 2, you practice a different set of engineering judgments than Lab 1:
 
-- **Declarative infrastructure**: define *what* should exist, not *how* to create it
-- **Idempotent configuration**: run your Ansible playbook 10 times; the result is always the same
-- **Artifact-based deployment**: your app becomes a container image — buildable anywhere, runnable anywhere
-- **Secret discipline**: no credentials in source code, ever
-- **Reproducibility**: destroy everything, rebuild from scratch with a single command sequence
+- **Choosing the right level of abstraction**: not every homelab needs a full virtualization automation layer
+- **Ansible as the center of gravity**: host configuration, security controls, and application setup all flow through one playbook
+- **Security as day-one design**: firewalling, SSH posture, fail2ban, unattended security updates, and a sysctl baseline are part of the initial build
+- **Operational clarity**: a small, understandable system is easier to debug and maintain than a more "complete" one with unnecessary moving parts
+- **Documenting tradeoffs honestly**: the goal is not to pretend the design is perfect; the goal is to understand why each choice was made
 
-If that sequence works end-to-end, you're operating at a different level than someone keeping a single snowflake server alive.
+If Lab 1 teaches full-stack infrastructure automation, Lab 2 teaches restraint.
 
 ---
 
@@ -37,182 +40,158 @@ If that sequence works end-to-end, you're operating at a different level than so
 
 Before you start, you'll need:
 
-- A **Proxmox VE** host with API token access enabled
-- An **Ubuntu cloud-init template** (VM ID 9000) — follow [docs/proxmox-setup.md](docs/proxmox-setup.md) to create one, or use [docs/ubuntu-cloud-init.md](docs/ubuntu-cloud-init.md) for a detailed shell-based walkthrough
-- A **GitHub repository** to host the Actions workflow
-- A **Docker Hub** or GitHub Container Registry account for the image push
+- A manually installed **Ubuntu Server** host reachable over SSH
+- An SSH key available on your control machine
+- An Ansible control machine with access to the target host
+- A GitHub repository if you want to use the example CI/CD workflow
+- A Docker Hub account if you want to push container images from GitHub Actions
+
+This lab currently targets:
+
+- host: `art-host`
+- IP: `192.168.4.200`
+- SSH user: `art`
+
+Those values live in [`ansible/inventory.ini`](ansible/inventory.ini) and should be treated as environment-specific.
 
 ---
 
-## Step 1 — Infrastructure as Code with Terraform
+## Step 1 — Install Ubuntu Once, Then Stop Clicking
 
-> *"If your VM exists only because you clicked 'Create', it exists only in that moment."* — [Homelab Blueprint](docs/homelab-blueprint.md)
+Lab 2 starts with a manual Ubuntu Server installation. That is an intentional boundary.
 
-Terraform describes infrastructure declaratively. You define what should exist; Terraform calls the Proxmox API to make it real.
+The mistake is not doing one manual install. The mistake is continuing to manage the system manually after that.
 
-**Setup:**
+Once the machine exists and SSH works, the rest of the system should be driven from code. That means:
 
-```bash
-cd lab1/terraform/
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars — set the following variables:
-#   proxmox_api_url, proxmox_api_token_id, proxmox_api_token_secret
-#   proxmox_node_name, vm_template_id, bridge, disk_size
-#   ssh_public_keys, vm_password
-#   vm_ip_address  — static IP in CIDR notation (e.g. 192.168.4.31/24)
-#   vm_gateway     — default gateway (e.g. 192.168.4.1)
-```
+- SSH settings are managed in Ansible
+- firewall rules are managed in Ansible
+- package policy is managed in Ansible
+- Docker stack definitions are managed in Ansible
+- application deployment is managed in CI/CD
 
-**Apply:**
-
-```bash
-terraform init
-terraform validate
-terraform plan
-terraform apply
-```
-
-Plan first. Apply second. That discipline translates directly when you're touching production infrastructure later.
-
-> **State matters.** Terraform maintains a state file mapping declared resources to real Proxmox objects. In this lab, local state is fine — but understand that in production, state lives in a remote backend with locking. Know what you're trading off.
-
-> **Never commit secrets.** API tokens belong in `terraform.tfvars` (which is `.gitignore`'d), not in `main.tf`. Use variables and environment injection. If you're committing secrets, you're rehearsing a very bad habit.
+This split keeps the bootstrap simple without giving up infrastructure discipline.
 
 ---
 
-## Step 2 — Configuration Management with Ansible
+## Step 2 — Use Ansible as the Control Plane
 
-Terraform handed you a blank Ubuntu VM. It didn't give you Docker, firewall rules, or a configured deployment user. That's Ansible's job.
+> *"If the host is real but the configuration is not reproducible, you still have a snowflake."*
 
-Ansible connects over SSH, runs idempotent tasks, and leaves the machine in a known, repeatable state. No agent required.
+In Lab 2, Ansible is no longer just a post-provisioning helper. It becomes the primary control plane.
 
-**Setup:**
+The main playbook is small by design:
 
-```bash
-cd lab1/ansible/
-# inventory.ini is pre-configured with the static IP assigned by Terraform.
-# No manual IP lookup required — the VM always comes up at the address
-# defined in vm_ip_address (terraform.tfvars).
+```yaml
+- name: Setup ART Docker Hosts
+  hosts: art_hosts
+  become: yes
+
+  roles:
+    - role: ubuntu-hardening
+      tags: ["hardening"]
+    - role: docker
+      tags: ["docker"]
+    - role: portainer
+      tags: ["portainer"]
+    - role: homepage
+      tags: ["homepage"]
+    - role: nginx-proxy-manager
+      tags: ["nginx-proxy-manager"]
 ```
 
-**Install required collections:**
+That order matters.
 
-```bash
-ansible-galaxy collection install -r requirements.yml
-```
-
-**Configure role defaults** (optional — override in `host_vars/` or pass `--extra-vars`):
-
-| Role | Variable | Default |
-|---|---|---|
-| `homepage` | `homepage_port` | `4200` |
-| `homepage` | `homepage_allowed_hosts` | `192.168.4.23:4200,...` |
-| `nginx-proxy-manager` | `npm_data_dir` | `/volume1/docker/npm` |
-| `nginx-proxy-manager` | `npm_initial_admin_email` | set before first run |
-| `nginx-proxy-manager` | `npm_initial_admin_password` | set before first run |
-
-> **Heads-up:** `npm_initial_admin_email` and `npm_initial_admin_password` are used only on first startup to seed the NPM admin account. They are sensitive values — pass them via `--extra-vars` or Ansible Vault rather than committing them to `defaults/main.yml`.
-
-**Apply:**
-
-```bash
-ansible-playbook -i inventory.ini site.yml
-```
-
-The keyword here is **idempotent**. If Docker is already installed, Ansible won't reinstall it. If a container stack is already running, it won't restart it unnecessarily. Run this playbook tomorrow and it won't degrade anything.
-
-The playbook applies four roles in order:
-
-| Role | What it does |
+| Role | Why it goes first or later |
 |---|---|
-| `docker` | Installs Docker Engine and the Compose plugin |
-| `portainer` | Deploys Portainer CE for container management UI |
-| `homepage` | Deploys the [Homepage](https://gethomepage.dev) dashboard on port `4200` |
-| `nginx-proxy-manager` | Deploys [Nginx Proxy Manager](https://nginxproxymanager.com) on ports `80`, `443`, `81` (admin UI) |
+| `ubuntu-hardening` | Establishes the security baseline before application exposure grows |
+| `docker` | Prepares the runtime platform used by the app roles |
+| `portainer` | Adds container management UI |
+| `homepage` | Adds service discovery/dashboard capability |
+| `nginx-proxy-manager` | Adds reverse-proxy and ingress management |
 
-As your lab grows, Ansible roles keep things organized:
+This is cleaner than letting hardening become a scattered collection of one-off shell commands after the fact.
 
-```
-ansible/
-├── ansible.cfg
-├── inventory.ini
-├── site.yml
-├── requirements.yml
-└── roles/
-    ├── docker/
-    │   └── tasks/main.yml
-    ├── portainer/
-    │   └── tasks/main.yml
-    ├── homepage/
-    │   ├── defaults/main.yml
-    │   ├── tasks/main.yml
-    │   └── templates/docker-compose.yml.j2
-    └── nginx-proxy-manager/
-        ├── defaults/main.yml
-        ├── tasks/main.yml
-        └── templates/docker-compose.yml.j2
-```
-
-This isn't overengineering — it's rehearsal for environments where multiple people maintain the same automation repository.
+For run instructions, validation commands, and tag-level execution patterns, see [ansible/README.md](ansible/README.md).
 
 ---
 
-## Step 3 — Containerization with Docker
+## Step 3 — Harden the Host Before You Scale the Apps
 
-Your VM is now a Docker host. Ansible deploys all services as container stacks — nothing is installed directly onto the OS beyond Docker itself.
+Lab 2’s biggest architectural difference is that host hardening is a first-class role, not a side note.
 
-The Ansible playbook provisions four services, each as an isolated Compose stack:
+The `ubuntu-hardening` role currently manages:
 
-| Service | Port(s) | Purpose |
-|---|---|---|
-| **Portainer** | `9000` | Container management UI |
-| **Homepage** | `4200` | Lab dashboard — aggregates service links and status |
-| **Nginx Proxy Manager** | `80`, `443`, `81` | Reverse proxy with Let's Encrypt TLS and a web admin UI |
-| **my-app** | (CI/CD-managed) | Your custom app, deployed by the GitHub Actions pipeline |
+- SSH port and authentication policy
+- root login restrictions
+- UFW default deny inbound / allow outbound policy
+- explicit allowlists for required ports
+- Fail2ban
+- unattended security upgrades
+- Cockpit with LAN-restricted access
+- `systemd-timesyncd`
+- a conservative network/kernel sysctl baseline
 
-**Setup the custom app directory on the Docker host:**
+Default values live in [`ansible/roles/ubuntu-hardening/defaults/main.yml`](ansible/roles/ubuntu-hardening/defaults/main.yml), including:
 
-```bash
-mkdir -p /opt/my-app
-# Copy lab1/my-app/docker-compose.yml to /opt/my-app/
-# Replace 'youruser' with your Docker Hub username
-```
+- SSH password authentication disabled
+- root login disabled
+- UFW enabled
+- unattended security-only upgrades enabled
+- Cockpit enabled on `9090`, restricted to `192.168.4.0/24`
 
-A few lessons baked into the Docker layer worth internalizing:
+The larger lesson is not "use these exact settings forever." It is this:
 
-- **Pin versions.** Don't use `latest` in production-style configs. `nginx:1.25-alpine` is explicit and reproducible.
-- **Add health checks.** They determine how your stack behaves at 3 a.m. when something quietly fails. NPM's health check (`/dev/tcp/127.0.0.1/81`) is a good pattern to copy.
-- **Specify restart policies.** `on-failure:5` retries on crash but won't loop endlessly if the container is intentionally stopped.
+**security controls should be versioned, reviewable, and repeatable just like app deployment.**
 
-With Docker, your application becomes a portable artifact — built in CI, tagged, pushed to a registry, pulled onto any compatible host. That separation between *build* and *run* is what makes automated delivery possible.
+For the deeper walkthrough, read [docs/ubuntu-hardening-with-ansible.md](docs/ubuntu-hardening-with-ansible.md).
 
 ---
 
-## Step 4 — CI/CD and Automated Delivery
+## Step 4 — Keep Apps Boring
 
-> *"Without CI/CD, deployment is an SSH habit."* — [Homelab Blueprint](docs/homelab-blueprint.md)
+The application layer is intentionally straightforward:
 
-You log in, pull changes, restart services, hope nothing breaks. That doesn't scale, and it doesn't leave a paper trail.
+- Portainer for container visibility and management
+- Homepage for a dashboard
+- Nginx Proxy Manager for ingress and certificate management
 
-With a pipeline, change is event-driven: a Git push triggers a build → produces an image → pushes it to a registry → the server pulls and restarts.
+Each service is deployed as a dedicated Compose stack through its own Ansible role. That gives you:
 
-**Setup:**
+- clean ownership boundaries
+- templated configuration
+- easier per-service troubleshooting
+- the ability to re-run the playbook without manually reconstructing the host
 
-1. Copy `lab1/.github` to your repository root as `.github` (GitHub only runs workflows from the root). The workflow uses paths `lab1/my-app/**` and build context `./lab1/my-app`. If `lab1/` *is* your repo root, update those paths to `my-app/**` and `./my-app`.
+This isn't glamorous, but that is part of the point. Homelabs become fragile when every service has a different setup pattern and every rebuild requires memory instead of code.
 
-2. In your GitHub repo, go to **Settings → Secrets and variables → Actions** and add:
+---
 
-   | Secret | Value |
-   |---|---|
-   | `DOCKER_USERNAME` | Your Docker Hub username |
-   | `DOCKER_PASSWORD` | Your Docker Hub password or access token |
-   | `SSH_PRIVATE_KEY` | Private key that can SSH into the Docker host |
-   | `DEPLOY_HOST` | IP address or hostname of the Docker host |
-   | `DEPLOY_USER` | SSH user on the Docker host |
+## Step 5 — Add CI/CD Where It Actually Helps
 
-3. Push to `main`. The workflow builds the image, pushes it to Docker Hub, and SSHs into the host to run `docker compose pull && docker compose up -d`.
+Lab 2 still includes a GitHub Actions workflow for the sample app, because app delivery benefits from automation even when infrastructure provisioning is intentionally simplified.
 
-**What changes:** The server doesn't need your source code anymore. It needs a trusted, versioned image and instructions to refresh it. Every deployment is traceable to a commit hash. You've moved from manual change to controlled release.
+That separation is worth noticing:
+
+- the **host lifecycle** is simpler than Lab 1
+- the **configuration lifecycle** is stronger than a purely manual server
+- the **application delivery lifecycle** can still be automated
+
+This is the right kind of compromise. You are simplifying the layer that did not add enough value, not abandoning automation altogether.
+
+---
+
+## Supporting Reading
+
+Use these docs alongside the main walkthrough:
+
+| Path | Purpose |
+|---|---|
+| [docs/ansible-first-homelab.md](docs/ansible-first-homelab.md) | Why Lab 2 exists and when Ansible-first is the right choice |
+| [docs/ubuntu-hardening-with-ansible.md](docs/ubuntu-hardening-with-ansible.md) | Detailed walkthrough of the hardening model and operational intent |
+| [docs/operational-lessons-and-backlog.md](docs/operational-lessons-and-backlog.md) | What this lab taught, where it is still rough, and what should improve next |
+| [docs/ansible-findings-backlog.md](docs/ansible-findings-backlog.md) | Raw findings list and concrete remediation backlog |
+| [ansible/README.md](ansible/README.md) | Execution and verification commands |
 
 ---
 
@@ -220,54 +199,25 @@ With a pipeline, change is event-driven: a Git push triggers a build → produce
 
 | Path | Purpose |
 |---|---|
-| [`terraform/`](terraform/) | Proxmox VM definition — `docker-host-01` |
-| [`ansible/`](ansible/) | Docker install, service deployment, host configuration |
-| [`ansible/roles/docker/`](ansible/roles/docker/) | Installs Docker Engine |
-| [`ansible/roles/portainer/`](ansible/roles/portainer/) | Deploys Portainer CE |
-| [`ansible/roles/homepage/`](ansible/roles/homepage/) | Deploys Homepage dashboard |
-| [`ansible/roles/nginx-proxy-manager/`](ansible/roles/nginx-proxy-manager/) | Deploys Nginx Proxy Manager |
-| [`my-app/`](my-app/) | Static site app (Dockerfile, index.html, docker-compose) |
-| [`.github/workflows/`](.github/workflows/) | CI/CD build and deploy workflow |
-| [`docs/`](docs/) | Supporting guides — Proxmox setup, cloud-init, blueprint |
-
-> **Secrets:** Never commit `terraform.tfvars`, `.env`, or any private keys. Use environment variables and GitHub Actions secrets only.
-
----
-
-## The Full Rebuild Test
-
-The real validation of this lab isn't that it works once. It's that it can be destroyed and rebuilt from code without guesswork.
-
-```bash
-# 1. Destroy the VM
-cd lab1/terraform && terraform destroy
-
-# 2. Recreate infrastructure
-terraform apply
-
-# 3. Reconfigure the host
-cd lab1/ansible && ansible-playbook -i inventory.ini site.yml
-
-# 4. Redeploy the app
-# Push a change to main — the pipeline handles the rest
-```
-
-If that sequence works end-to-end, the lab is fully reproducible. That's the bar worth clearing.
+| [`ansible/`](ansible/) | Primary control plane for host hardening and service deployment |
+| [`ansible/roles/ubuntu-hardening/`](ansible/roles/ubuntu-hardening/) | SSH, firewall, fail2ban, updates, Cockpit, sysctl baseline |
+| [`ansible/roles/docker/`](ansible/roles/docker/) | Docker Engine and runtime setup |
+| [`ansible/roles/portainer/`](ansible/roles/portainer/) | Portainer deployment |
+| [`ansible/roles/homepage/`](ansible/roles/homepage/) | Homepage dashboard deployment |
+| [`ansible/roles/nginx-proxy-manager/`](ansible/roles/nginx-proxy-manager/) | Reverse proxy deployment |
+| [`my-app/`](my-app/) | Example app artifact used by the workflow |
+| [`docs/`](docs/) | Narrative docs, hardening explanation, and lessons learned |
 
 ---
 
 ## What This Lab Really Trains
 
-A well-built homelab is a rehearsal space for production responsibility. By the time you've completed Lab 1, you've practiced:
+Lab 1 trains full-stack infrastructure automation.
 
-- Version-controlled infrastructure that can be reviewed in a pull request
-- Idempotent configuration that's safe to re-run at any time
-- Artifact-based deployment that decouples build from runtime
-- Secret management that doesn't rely on hoping nobody looks at the repo
-- Change management with a traceable audit trail
+Lab 2 trains judgment.
 
-None of that requires a cloud budget. It requires intention — and a refusal to rely on dashboards and muscle memory when code can do the job better.
+It forces a more useful question:
 
----
+> What is the smallest architecture that still gives me repeatability, security, and operational sanity?
 
-*Continue reading: [Homelab DevOps Blueprint](docs/homelab-blueprint.md) — the full narrative on why each layer exists and what each one trains you to think about.*
+That question matters more than whether a design looks "advanced" on paper.
