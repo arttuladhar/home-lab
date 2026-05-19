@@ -1,0 +1,16 @@
+---
+- name: Setup ART Docker Hosts
+  hosts: art_hosts
+  become: yes
+
+  roles:
+    - role: ubuntu-hardening
+      tags: ["hardening"]
+    - role: docker
+      tags: ["docker"]
+    - role: portainer
+      tags: ["portainer"]
+    - role: homepage
+      tags: ["homepage"]
+    - role: nginx-proxy-manager
+      tags: ["nginx-proxy-manager"]

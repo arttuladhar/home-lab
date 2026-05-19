@@ -1,0 +1,25 @@
+---
+- name: Ensure Portainer stack directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ portainer_stack_dir }}"
+    - "{{ portainer_stack_dir }}/data"
+  when: portainer_enabled
+
+- name: Deploy Portainer stack compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ portainer_stack_dir }}/docker-compose.yml"
+    mode: "0644"
+  when: portainer_enabled
+
+- name: Deploy Portainer stack
+  community.docker.docker_compose_v2:
+    project_name: portainer
+    project_src: "{{ portainer_stack_dir }}"
+    state: present
+    pull: always
+  when: portainer_enabled

@@ -1,0 +1,156 @@
+---
+- name: Ensure required hardening packages are installed
+  apt:
+    name:
+      - ufw
+      - fail2ban
+      - unattended-upgrades
+      - apt-listchanges
+      - cockpit
+    state: present
+    update_cache: yes
+
+- name: Ensure time sync package is installed
+  apt:
+    name: systemd-timesyncd
+    state: present
+
+- name: Ensure time sync service is enabled and running
+  service:
+    name: systemd-timesyncd
+    enabled: yes
+    state: started
+
+- name: Configure SSH port
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?Port\s+'
+    line: "Port {{ hardening_ssh_port }}"
+    backup: yes
+  notify: Restart ssh
+
+- name: Configure SSH password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication\s+'
+    line: "PasswordAuthentication {{ 'yes' if hardening_ssh_password_auth else 'no' }}"
+    backup: yes
+  notify: Restart ssh
+
+- name: Configure SSH root login policy
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin\s+'
+    line: "PermitRootLogin {{ 'yes' if hardening_ssh_permit_root_login else 'no' }}"
+    backup: yes
+  notify: Restart ssh
+
+- name: Ensure SSH key auth is enabled
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PubkeyAuthentication\s+'
+    line: 'PubkeyAuthentication yes'
+    backup: yes
+  notify: Restart ssh
+
+- name: Set UFW defaults (deny incoming)
+  ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set UFW defaults (allow outgoing)
+  ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Allow required UFW TCP ports
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: "{{ hardening_ufw_allowed_tcp_ports }}"
+
+- name: Allow Cockpit port from trusted CIDRs
+  ufw:
+    rule: allow
+    port: "{{ hardening_cockpit_port }}"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_cockpit_allowed_cidrs }}"
+  when: hardening_enable_cockpit
+
+- name: Ensure UFW is enabled
+  ufw:
+    state: enabled
+
+- name: Ensure cockpit socket is enabled and running
+  service:
+    name: cockpit.socket
+    enabled: yes
+    state: started
+  when: hardening_enable_cockpit
+
+- name: Ensure fail2ban is enabled and running
+  service:
+    name: fail2ban
+    enabled: yes
+    state: started
+  when: hardening_enable_fail2ban
+
+- name: Ensure unattended upgrades are configured
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "{{ '1' if hardening_enable_unattended_upgrades else '0' }}";
+
+- name: Configure unattended-upgrades automatic reboot policy
+  lineinfile:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+    regexp: '^//?\s*Unattended-Upgrade::Automatic-Reboot\s+'
+    line: "Unattended-Upgrade::Automatic-Reboot \"{{ 'true' if hardening_unattended_auto_reboot else 'false' }}\";"
+    backup: yes
+
+- name: Restrict unattended-upgrades to security updates
+  copy:
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=${distro_id},archive=${distro_codename}-security";
+      };
+  when: hardening_unattended_security_only
+
+- name: Remove local unattended-upgrades override when not security-only
+  file:
+    path: /etc/apt/apt.conf.d/52unattended-upgrades-local
+    state: absent
+  when: not hardening_unattended_security_only
+
+- name: Apply conservative kernel/network sysctl baseline
+  copy:
+    dest: /etc/sysctl.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.send_redirects = 0
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      net.ipv4.tcp_syncookies = 1
+      kernel.randomize_va_space = 2
+  when: hardening_apply_sysctl_baseline
+
+- name: Load sysctl settings
+  command: sysctl --system
+  changed_when: true
+  when: hardening_apply_sysctl_baseline

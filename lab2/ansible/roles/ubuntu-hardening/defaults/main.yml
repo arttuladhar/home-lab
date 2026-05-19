@@ -1,0 +1,17 @@
+---
+hardening_ssh_port: 22
+hardening_ssh_password_auth: false
+hardening_ssh_permit_root_login: false
+hardening_ufw_allowed_tcp_ports:
+  - 22
+  - 80
+  - 443
+hardening_enable_fail2ban: true
+hardening_enable_unattended_upgrades: true
+hardening_unattended_security_only: true
+hardening_unattended_auto_reboot: false
+hardening_apply_sysctl_baseline: true
+hardening_enable_cockpit: true
+hardening_cockpit_port: 9090
+hardening_cockpit_allowed_cidrs:
+  - 192.168.4.0/24

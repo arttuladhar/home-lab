@@ -1,0 +1,14 @@
+services:
+  portainer:
+    image: "portainer/portainer-ce:{{ portainer_version }}"
+    container_name: portainer
+    ports:
+{% for p in portainer_ports %}
+      - "{{ p }}"
+{% endfor %}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "{{ portainer_stack_dir }}/data:/data"
+    environment:
+      TZ: "{{ portainer_timezone }}"
+    restart: always

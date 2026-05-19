@@ -1,0 +1,9 @@
+---
+npm_enabled: true
+npm_version: latest
+npm_stack_dir: /opt/stacks/nginx-proxy-manager
+npm_timezone: America/Chicago
+npm_ports:
+  - "80:80"
+  - "81:81"
+  - "443:443"
